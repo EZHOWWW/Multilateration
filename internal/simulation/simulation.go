@@ -3,8 +3,8 @@ package simulation
 import (
 	"fmt"
 	"math/rand"
-	"multilateration-sim/internal/common"          // Замените на ваше имя модуля
-	"multilateration-sim/internal/multilateration" // Импортируем наш солвер
+	"multilateration-sim/internal/common" // Замените на ваше имя модуля
+	"multilateration-sim/internal/multilateration"
 	"strings"
 	"time"
 )
@@ -12,25 +12,24 @@ import (
 // Simulation holds the state of the n-dimensional simulation.
 type Simulation struct {
 	dimension      int
-	bounds         []float64                   // Simulation space boundaries [minX, maxX, minY, maxY, ...]
-	objects        map[string]SimulationObject // All objects in the simulation, mapped by ID
-	sensors        map[string]*Sensor          // Quick access to sensors
-	targets        map[string]*Target          // Quick access to targets
-	simulationTime float64                     // Total elapsed simulation time
-	tickDuration   time.Duration               // How much real time corresponds to one simulation step (Update call)
+	bounds         []float64
+	objects        map[string]SimulationObject
+	sensors        map[string]*Sensor
+	targets        map[string]*Target
+	simulationTime float64
+	tickDuration   time.Duration // Not directly used by Step, but kept for context
 
-	// Store last known estimated positions and errors for visualization later
-	lastEstimates map[string]multilateration.Solution // Map target ID to last Solution
-	lastErrors    map[string]float64                  // Map target ID to last localization error distance
+	lastEstimates map[string]multilateration.Solution
+	lastErrors    map[string]float64
 }
 
 // NewSimulation creates a new simulation environment.
 func NewSimulation(dimension int, bounds []float64, tickDuration time.Duration) (*Simulation, error) {
-	if len(bounds) != dimension*2 {
-		return nil, fmt.Errorf("bounds length must be dimension * 2, got %d, expected %d", len(bounds), dimension*2)
+	if len(bounds) != dimension*2 && dimension > 0 { // Allow empty bounds for 0-dim (though unlikely)
+		return nil, fmt.Errorf("bounds length must be dimension * 2, got %d, expected %d for dim %d", len(bounds), dimension*2, dimension)
 	}
-	if dimension <= 0 {
-		return nil, fmt.Errorf("dimension must be positive, got %d", dimension)
+	if dimension < 0 { // Allow 0 dimension if it makes sense for some edge case, but typically >= 1
+		return nil, fmt.Errorf("dimension must be non-negative, got %d", dimension)
 	}
 
 	return &Simulation{
@@ -46,6 +45,9 @@ func NewSimulation(dimension int, bounds []float64, tickDuration time.Duration) 
 	}, nil
 }
 
+// AddObject, AddRandomSensor, AddRandomTarget, GetObject, GetSensors, GetTargets,
+// GetLastEstimate, GetLastLocalizationError - остаются без изменений с предыдущей версии.
+
 // AddObject adds a simulation object to the simulation.
 func (s *Simulation) AddObject(obj SimulationObject) error {
 	if obj.GetPosition().Dimension() != s.dimension {
@@ -57,14 +59,12 @@ func (s *Simulation) AddObject(obj SimulationObject) error {
 	}
 	s.objects[id] = obj
 
-	// Add to specific maps for easier access
 	switch v := obj.(type) {
 	case *Sensor:
 		s.sensors[id] = v
 	case *Target:
 		s.targets[id] = v
-		// Initialize estimate/error map for new target
-		s.lastEstimates[id] = multilateration.Solution{Position: nil, ResidualError: -1} // Indicate no estimate yet
+		s.lastEstimates[id] = multilateration.Solution{Position: nil, ResidualError: -1}
 		s.lastErrors[id] = -1.0
 	}
 	return nil
@@ -76,7 +76,7 @@ func (s *Simulation) AddRandomSensor(radius float64, noise NoiseFunction) error 
 	if err != nil {
 		return fmt.Errorf("failed to generate random position for sensor: %w", err)
 	}
-	sensor := NewSensor(pos, radius, noise)
+	sensor := NewSensor(pos, radius, noise) // NewSensor handles nil noise
 	return s.AddObject(sensor)
 }
 
@@ -126,117 +126,134 @@ func (s *Simulation) GetLastLocalizationError(targetID string) (float64, bool) {
 	return errVal, ok
 }
 
-// Run executes the simulation loop for a given number of steps or until stopped.
-func (s *Simulation) Run(numSteps int) {
-	fmt.Printf("Starting simulation: Dimension=%d, Bounds=%v, TickDuration=%s\n", s.dimension, s.bounds, s.tickDuration)
-	fmt.Println("Initial State:")
-	s.PrintState()
-
-	deltaTime := s.tickDuration.Seconds() // Time elapsed in each step
-
-	for i := 0; i < numSteps; i++ {
-		s.simulationTime += deltaTime
-		fmt.Printf("\n--- Simulation Step %d (Time: %.2fs) ---\n", i+1, s.simulationTime)
-
-		// 1. Update all objects (move targets, etc.)
-		for _, obj := range s.objects {
-			obj.Update(deltaTime, s.bounds)
-		}
-
-		// --- Logging Updated Positions ---
-		fmt.Println("  Updated Positions:")
-		for _, sen := range s.sensors {
-			fmt.Printf("    %s\n", sen)
-		}
-		for _, tar := range s.targets {
-			fmt.Printf("    %s\n", tar)
-		}
-		fmt.Println("  ---")
-
-		// 2. Measurement Phase & Multilateration Phase
-		fmt.Println("  Localization Attempts:")
-		for _, tar := range s.targets {
-			targetID := tar.GetID()
-			targetMeasurements := make([]multilateration.Measurement, 0, len(s.sensors))
-			measurementDetails := []string{} // For logging
-
-			// Collect measurements from all sensors for this target
-			for _, sen := range s.sensors {
-				dist, inRange, err := sen.MeasureDistance(tar)
-				if err != nil {
-					// Log error but continue, maybe other sensors work
-					fmt.Printf("    [%s] Error measuring from %s: %v\n", targetID, sen.GetID(), err)
-					continue
-				}
-				if inRange {
-					targetMeasurements = append(targetMeasurements, multilateration.Measurement{
-						SensorPosition: sen.GetPosition(),
-						Distance:       dist,
-					})
-					trueDist, _ := sen.GetPosition().Distance(tar.GetPosition())
-					measurementDetails = append(measurementDetails, fmt.Sprintf("%s(d=%.2f|t=%.2f)", sen.GetID(), dist, trueDist))
-				}
-			}
-
-			// Attempt localization if enough measurements are available
-			requiredMeasurements := s.dimension + 1
-			logPrefix := fmt.Sprintf("    Target %s (%d measurements [%s]):", targetID, len(targetMeasurements), strings.Join(measurementDetails, ", "))
-
-			if len(targetMeasurements) >= requiredMeasurements {
-				solution, err := multilateration.SolveLeastSquares(targetMeasurements, s.dimension)
-
-				truePos := tar.GetPosition()
-				if err != nil {
-					fmt.Printf("%s Localization failed: %v\n", logPrefix, err)
-					// Reset last estimate/error for this target
-					s.lastEstimates[targetID] = multilateration.Solution{Position: nil, ResidualError: -1}
-					s.lastErrors[targetID] = -1.0
-				} else {
-					estimatedPos := solution.Position
-					residualErr := solution.ResidualError
-					localizationErr, distErr := multilateration.CalculateLocalizationError(truePos, estimatedPos)
-
-					errorStr := "N/A"
-					if distErr == nil {
-						errorStr = fmt.Sprintf("%.3f", localizationErr)
-						s.lastErrors[targetID] = localizationErr // Store last error distance
-					} else {
-						s.lastErrors[targetID] = -1.0 // Indicate error calculation failed
-					}
-
-					// Store last estimate
-					s.lastEstimates[targetID] = solution
-
-					fmt.Printf("%s True Pos: %s -> Est Pos: %s (Error: %s, Residual: %.3f)\n",
-						logPrefix, truePos, estimatedPos, errorStr, residualErr)
-				}
-			} else {
-				fmt.Printf("%s Insufficient measurements (%d/%d) for localization.\n",
-					logPrefix, len(targetMeasurements), requiredMeasurements)
-				// Reset last estimate/error if not enough measurements
-				s.lastEstimates[targetID] = multilateration.Solution{Position: nil, ResidualError: -1}
-				s.lastErrors[targetID] = -1.0
-			}
-		}
-
-		// Optional delay for console viewing
-		// time.Sleep(50 * time.Millisecond)
+// GetAllObjects returns a slice of all simulation objects.
+func (s *Simulation) GetAllObjects() []SimulationObject {
+	all := make([]SimulationObject, 0, len(s.objects))
+	for _, obj := range s.objects {
+		all = append(all, obj)
 	}
-
-	fmt.Println("\n--- Simulation Finished ---")
-	s.PrintState()
+	return all
 }
 
-// PrintState prints the current positions of all objects.
+// GetCurrentTime returns the current simulation time.
+func (s *Simulation) GetCurrentTime() float64 {
+	return s.simulationTime
+}
+
+// Step performs one step of the simulation: updates objects and attempts localization.
+func (s *Simulation) Step(deltaTime float64) {
+	s.simulationTime += deltaTime
+
+	// 1. Update all objects (move targets, etc.)
+	for _, obj := range s.objects {
+		obj.Update(deltaTime, s.bounds)
+	}
+
+	// 2. Measurement Phase & Multilateration Phase (for each target)
+	for _, tar := range s.targets {
+		targetID := tar.GetID()
+		targetMeasurements := make([]multilateration.Measurement, 0, len(s.sensors))
+
+		for _, sen := range s.sensors {
+			dist, inRange, err := sen.MeasureDistance(tar)
+			if err != nil {
+				// Log error internally or decide how to handle; for now, skip this measurement
+				fmt.Printf("    [Internal Log - Target %s] Error measuring from %s: %v\n", targetID, sen.GetID(), err)
+				continue
+			}
+			if inRange {
+				targetMeasurements = append(targetMeasurements, multilateration.Measurement{
+					SensorPosition: sen.GetPosition(),
+					Distance:       dist,
+				})
+			}
+		}
+
+		requiredMeasurements := s.dimension + 1
+		if len(targetMeasurements) >= requiredMeasurements {
+			solution, err := multilateration.SolveLeastSquares(targetMeasurements, s.dimension)
+			if err == nil {
+				s.lastEstimates[targetID] = solution
+				truePos := tar.GetPosition()
+				localizationErr, distErr := multilateration.CalculateLocalizationError(truePos, solution.Position)
+				if distErr == nil {
+					s.lastErrors[targetID] = localizationErr
+				} else {
+					s.lastErrors[targetID] = -1.0 // Error calculating error
+				}
+			} else {
+				// Localization failed
+				s.lastEstimates[targetID] = multilateration.Solution{Position: nil, ResidualError: -1}
+				s.lastErrors[targetID] = -1.0
+				// fmt.Printf("    [Internal Log - Target %s] Localization failed: %v\n", targetID, err)
+			}
+		} else {
+			// Insufficient measurements
+			s.lastEstimates[targetID] = multilateration.Solution{Position: nil, ResidualError: -1}
+			s.lastErrors[targetID] = -1.0
+		}
+	}
+}
+
+// LogCurrentState prints the current state of object positions and localization attempts.
+func (s *Simulation) LogCurrentState() {
+	fmt.Println("  Updated Positions:")
+	for _, sen := range s.sensors { // Log sensors first
+		fmt.Printf("    %s\n", sen)
+	}
+	for _, tar := range s.targets { // Then targets
+		fmt.Printf("    %s\n", tar)
+	}
+	fmt.Println("  ---")
+	fmt.Println("  Localization Results:")
+	for _, tar := range s.targets {
+		targetID := tar.GetID()
+		truePos := tar.GetPosition()
+		solution, estOk := s.lastEstimates[targetID]
+		locErr, errOk := s.lastErrors[targetID]
+
+		// Reconstruct measurement details for logging (optional, can be verbose)
+		measurementDetails := []string{}
+		numActualMeasurements := 0
+		for _, sen := range s.sensors {
+			dist, inRange, _ := sen.MeasureDistance(tar) // Ignoring error here for brevity
+			if inRange {
+				numActualMeasurements++
+				trueDist, _ := sen.GetPosition().Distance(tar.GetPosition())
+				measurementDetails = append(measurementDetails, fmt.Sprintf("%s(d=%.2f|t=%.2f)", sen.GetID(), dist, trueDist))
+			}
+		}
+		logPrefix := fmt.Sprintf("    Target %s (%d measurements [%s]):", targetID, numActualMeasurements, strings.Join(measurementDetails, ", "))
+
+		if estOk && solution.Position != nil {
+			errorStr := "N/A"
+			if errOk && locErr >= 0 {
+				errorStr = fmt.Sprintf("%.3f", locErr)
+			}
+			fmt.Printf("%s True Pos: %s -> Est Pos: %s (Error: %s, Residual: %.3f)\n",
+				logPrefix, truePos, solution.Position, errorStr, solution.ResidualError)
+		} else {
+			requiredMeasurements := s.dimension + 1
+			if numActualMeasurements < requiredMeasurements {
+				fmt.Printf("%s Insufficient measurements (%d/%d) for localization.\n",
+					logPrefix, numActualMeasurements, requiredMeasurements)
+			} else {
+				fmt.Printf("%s Localization failed or no estimate available.\n", logPrefix)
+			}
+		}
+	}
+}
+
+// PrintState prints the initial/final summary state of the simulation.
 func (s *Simulation) PrintState() {
-	fmt.Println("--- Current Simulation State ---")
-	fmt.Printf("Time: %.2fs\n", s.simulationTime)
+	fmt.Println("--- Simulation State Summary ---")
+	fmt.Printf("Time: %.2fs, Dimension: %d\n", s.simulationTime, s.dimension)
 	fmt.Println("Sensors:")
 	if len(s.sensors) == 0 {
 		fmt.Println("  None")
 	}
 	for _, sen := range s.sensors {
-		fmt.Printf("  %s\n", sen) // Uses String() method
+		fmt.Printf("  %s\n", sen)
 	}
 	fmt.Println("Targets:")
 	if len(s.targets) == 0 {
@@ -245,20 +262,38 @@ func (s *Simulation) PrintState() {
 	for _, tar := range s.targets {
 		lastEst, okEst := s.GetLastEstimate(tar.GetID())
 		lastErr, okErr := s.GetLastLocalizationError(tar.GetID())
-		estimateStr := "None"
+		estimateStr := "No estimate yet."
 		if okEst && lastEst.Position != nil {
 			errStr := "N/A"
 			if okErr && lastErr >= 0 {
 				errStr = fmt.Sprintf("%.3f", lastErr)
 			}
-			estimateStr = fmt.Sprintf("Est: %s (Err: %s, Resid: %.3f)", lastEst.Position, errStr, lastEst.ResidualError)
+			estimateStr = fmt.Sprintf("Last Est: %s (Err: %s, Resid: %.3f)", lastEst.Position, errStr, lastEst.ResidualError)
 		}
-		fmt.Printf("  %s | %s\n", tar, estimateStr) // Uses String() method
+		fmt.Printf("  %s | %s\n", tar, estimateStr)
 	}
 	fmt.Println("-----------------------------")
 }
 
-// Initialize random seed
+// Run (old version, kept for reference or if needed for non-Ebiten runs)
+func (s *Simulation) RunLegacy(numSteps int) {
+	fmt.Printf("Starting simulation: Dimension=%d, Bounds=%v, TickDuration=%s\n", s.dimension, s.bounds, s.tickDuration)
+	fmt.Println("Initial State:")
+	s.PrintState()
+
+	deltaTime := s.tickDuration.Seconds()
+
+	for i := 0; i < numSteps; i++ {
+		fmt.Printf("\n--- Simulation Step %d (Time: %.2fs) ---\n", i+1, s.GetCurrentTime())
+		s.Step(deltaTime)
+		s.LogCurrentState()
+		// time.Sleep(50 * time.Millisecond) // Optional delay
+	}
+
+	fmt.Println("\n--- Simulation Finished ---")
+	s.PrintState()
+}
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }
