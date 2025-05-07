@@ -23,9 +23,10 @@ type Sensor struct {
 
 // NewSensor creates a new sensor at a given position.
 func NewSensor(pos common.Vector, radius float64, noise NoiseFunction) *Sensor {
-	if noise == nil {
-		noise = func(d float64) float64 { return d } // Default: no noise
-	}
+	// if noise == nil {
+	// 	noise = func(d float64) float64 { return d } // Default: no noise
+	// }
+	// Если функция nil, остовляем nil. Для того что бы вывод (Sensor.String) корректно обробатывал такие случаи
 	return &Sensor{
 		id:              fmt.Sprintf("sensor-%s", uuid.NewString()[:8]),
 		position:        pos.Clone(),
@@ -73,7 +74,14 @@ func (s *Sensor) MeasureDistance(target SimulationObject) (float64, bool, error)
 	}
 
 	// Apply noise using the provided noise function
-	noisyDist := s.noiseFunc(trueDist)
+	// Обработка, если функци nil
+	var noisyDist float64
+	if s.noiseFunc == nil {
+		noisyDist = trueDist
+	} else {
+		noisyDist = s.noiseFunc(trueDist)
+	}
+
 	if noisyDist < 0 {
 		noisyDist = 0 // Distance cannot be negative
 	}
