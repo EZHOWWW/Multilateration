@@ -9,33 +9,33 @@ import (
 	"time"
 )
 
+// Create bounds: [-bound, bound] times dim
+func createBounds(dim int, bound float64) []float64 {
+	bounds := make([]float64, 0, 2*dim)
+	for i := 0; i < dim; i++ {
+		bounds = append(bounds, -bound, bound)
+	}
+	return bounds
+}
 func main() {
 	rand.Seed(time.Now().UnixNano()) // Initialize random seed globally
 
 	// --- Simulation Parameters ---
-	simDimension := 3 // Давайте попробуем 3D, чтобы PCA был более наглядным
-	// Границы для 3D: X, Y, Z от -100 до 100
-	simBounds := []float64{-100.0, 100.0, -100.0, 100.0, -100.0, 100.0}
-	if simDimension == 2 {
-		simBounds = []float64{-100.0, 100.0, -100.0, 100.0}
-	} else if simDimension == 1 {
-		simBounds = []float64{-100.0, 100.0}
-	}
-
-	simTickDuration := time.Second / 10
-	numSensors := 5
-	numTargets := 3
-	numSteps := 10 // Уменьшим количество шагов для краткости вывода
-
+	simDimension := 3
+	bound := 100.0
+	simBounds := createBounds(simDimension, bound)
 	// --- Create Simulation ---
+	simTickDuration := time.Second / 10
 	sim, err := simulation.NewSimulation(simDimension, simBounds, simTickDuration)
 	if err != nil {
 		log.Fatalf("Error creating simulation: %v", err)
 	}
 
 	// --- Add Sensors ---
+	numSensors := 5
+	sensorRadius := 180.0
 	noiseFuncs := []simulation.NoiseFunction{
-		nil, // Без шума (проверка обработки nil)
+		nil,
 		simulation.GaussianNoise(2.5),
 		simulation.UniformNoise(3.0),
 		simulation.PercentageNoise(0.08),
@@ -44,13 +44,14 @@ func main() {
 
 	for i := 0; i < numSensors; i++ {
 		noiseFunc := noiseFuncs[i%len(noiseFuncs)]
-		err := sim.AddRandomSensor(180.0, noiseFunc) // Увеличим радиус для 3D
+		err := sim.AddRandomSensor(sensorRadius, noiseFunc)
 		if err != nil {
 			log.Printf("Warning: could not add sensor %d: %v", i, err)
 		}
 	}
 
 	// --- Add Targets ---
+	numTargets := 3
 	for i := 0; i < numTargets; i++ {
 		err := sim.AddRandomTarget()
 		if err != nil {
@@ -67,6 +68,7 @@ func main() {
 
 	deltaTime := simTickDuration.Seconds()
 
+	numSteps := 10 // Уменьшим количество шагов для краткости вывода
 	for i := 0; i < numSteps; i++ {
 		sim.Step(deltaTime) // Используем новый метод Sim.Step() (мы его добавим)
 
