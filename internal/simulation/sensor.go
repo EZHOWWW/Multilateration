@@ -74,7 +74,6 @@ func (s *Sensor) MeasureDistance(target SimulationObject) (float64, bool, error)
 	}
 
 	// Apply noise using the provided noise function
-	// Обработка, если функци nil
 	var noisyDist float64
 	if s.noiseFunc == nil {
 		noisyDist = trueDist
@@ -142,4 +141,8 @@ func PercentageNoise(percentage float64) NoiseFunction {
 		noise := (rand.Float64()*2 - 1) * noiseMagnitude // Noise between -noiseMagnitude and +noiseMagnitude
 		return trueDistance + noise
 	}
+}
+
+func (s *Sensor) DetectionRadius() float64 {
+	return s.detectionRadius
 }

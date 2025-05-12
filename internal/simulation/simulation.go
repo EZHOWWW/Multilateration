@@ -297,3 +297,7 @@ func (s *Simulation) RunLegacy(numSteps int) {
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }
+
+func (s *Simulation) GetDimension() int {
+	return s.dimension
+}

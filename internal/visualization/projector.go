@@ -34,7 +34,7 @@ func (p *PCAProjector) Project(objects []simulation.SimulationObject) (map[strin
 	}
 
 	sourceDim := objects[0].GetPosition().Dimension()
-	if sourceDim < p.targetDimension {
+	if sourceDim <= p.targetDimension {
 		// If source dimension is already 2D (or 1D), we can't reduce to 2D meaningfully via PCA this way.
 		// Or, if it's 2D, we can just return the original coordinates.
 		// For simplicity, if sourceDim < targetDim, let's return an error or handle as a special case.

@@ -60,14 +60,14 @@ func (t *Target) Update(deltaTime float64, bounds []float64) {
 
 	// --- Simple Random Walk Logic ---
 	// Adjust velocity slightly randomly
-	accelerationScale := 5.0 // How much velocity can change per second
+	accelerationScale := 50.0 // How much velocity can change per second
 	for i := 0; i < dim; i++ {
 		// Add a small random change to velocity
 		t.velocity[i] += (rand.Float64()*2 - 1) * accelerationScale * deltaTime
 	}
 
 	// --- Limit Velocity (Optional) ---
-	maxSpeed := 10.0 // Maximum units per second
+	maxSpeed := 300.0 // Maximum units per second
 	currentSpeedSq := 0.0
 	for _, v := range t.velocity {
 		currentSpeedSq += v * v
